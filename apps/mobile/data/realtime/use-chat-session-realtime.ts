@@ -13,9 +13,8 @@
  *                                  onto the assistant message
  *   - task:queued / dispatch    → seed / promote pendingTask
  *   - task:cancelled            → refresh pendingTask + messages
- *   - task:completed            → no-op for messages (chat:done already
- *                                  wrote the assistant message); just
- *                                  refresh pendingTask
+ *   - task:completed            → refresh messages + pendingTask, recovering
+ *                                  a missed chat:done
  *   - task:failed               → refresh pendingTask + invalidate messages
  *                                  (FailTask persists a failure assistant
  *                                  message that must show up)
@@ -24,9 +23,11 @@
  *   - reconnect                 → invalidate this session's messages +
  *                                  pendingTask
  */
+import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { chatKeys } from "@/data/queries/chat";
 import { useWSSubscriptions } from "@/lib/use-ws-subscriptions";
+import { useWSClient } from "./realtime-provider";
 import {
   appendTaskMessage,
   applyChatDoneToCache,
@@ -41,6 +42,16 @@ export function useChatSessionRealtime(
   onSessionDeleted?: () => void,
 ) {
   const qc = useQueryClient();
+  const wsClient = useWSClient();
+
+  // Switching to a warm Infinity cache and the first connection of a new WS
+  // client don't emit onReconnect. Reconcile independently of subscription
+  // callbacks, which may change identity on every screen render.
+  useEffect(() => {
+    if (!sessionId) return;
+    void qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
+    void qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
+  }, [qc, sessionId, wsClient]);
 
   useWSSubscriptions(
     (ws) => {
@@ -89,7 +100,8 @@ export function useChatSessionRealtime(
         }),
         ws.on("task:completed", (payload) => {
           if (!isMine(payload)) return;
-          invalidatePendingTask(qc, sessionId);
+          // chat:done may have been lost independently of task:completed.
+          invalidateMine();
         }),
         ws.on("task:failed", (payload) => {
           if (!isMine(payload)) return;

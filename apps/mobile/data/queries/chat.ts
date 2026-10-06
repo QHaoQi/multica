@@ -10,12 +10,11 @@
  * Same shape as web's `chatKeys` in packages/core/chat/queries.ts (mobile
  * owns its own copy per the "mirror, don't import" rule in apps/mobile/CLAUDE.md).
  *
- * `staleTime: Infinity` everywhere — caches are kept fresh by WS event
- * handlers, not by background refetch. Foreground / reconnect invalidates
- * are scoped to each owning hook (see use-chat-sessions-realtime.ts and
- * use-chat-session-realtime.ts).
+ * WS events keep caches fresh. Messages and pending state also reconcile on
+ * foreground/entry; a visible pending task polls as a fallback for lost events.
  */
 import { queryOptions } from "@tanstack/react-query";
+import type { ChatPendingTask } from "@multica/core/types";
 import { api } from "@/data/api";
 
 export const chatKeys = {
@@ -62,14 +61,33 @@ export const chatMessagesOptions = (sessionId: string | null) =>
     queryFn: ({ signal }) => api.listChatMessages(sessionId!, { signal }),
     enabled: !!sessionId,
     staleTime: Infinity,
+    refetchOnWindowFocus: "always",
+    refetchOnMount: "always",
+    refetchOnReconnect: "always",
   });
 
 export const pendingChatTaskOptions = (sessionId: string | null) =>
   queryOptions({
     queryKey: chatKeys.pendingTask(sessionId ?? ""),
-    queryFn: ({ signal }) => api.getPendingChatTask(sessionId!, { signal }),
+    queryFn: async ({ signal, client }) => {
+      const previous = client.getQueryData<ChatPendingTask>(
+        chatKeys.pendingTask(sessionId!),
+      );
+      const pending = await api.getPendingChatTask(sessionId!, { signal });
+      // A missed terminal event must recover the final reply as well as the
+      // status pill, including when a queued successor becomes the new head.
+      if (previous?.task_id && previous.task_id !== pending.task_id) {
+        void client.invalidateQueries({ queryKey: chatKeys.messages(sessionId!) });
+      }
+      return pending;
+    },
     enabled: !!sessionId,
     staleTime: Infinity,
+    refetchOnWindowFocus: "always",
+    refetchOnMount: "always",
+    refetchOnReconnect: "always",
+    refetchInterval: (query) => query.state.data?.task_id ? 30_000 : false,
+    refetchIntervalInBackground: false,
   });
 
 export const taskMessagesOptions = (taskId: string | null | undefined) =>
