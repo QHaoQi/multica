@@ -49,7 +49,7 @@ describe("useChatSessionsRealtime", () => {
       }
       invalidateQueries.mockClear();
       handlers.get(event)!({ issue_id: "issue-task" });
-      expect(invalidateQueries).toHaveBeenCalledTimes(1);
+      expect(invalidateQueries).not.toHaveBeenCalled();
     },
   );
 

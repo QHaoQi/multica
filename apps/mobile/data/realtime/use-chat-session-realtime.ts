@@ -13,8 +13,8 @@
  *                                  onto the assistant message
  *   - task:queued / dispatch    → seed / promote pendingTask
  *   - task:cancelled            → refresh pendingTask + messages
- *   - task:completed            → refresh messages + pendingTask, recovering
- *                                  a missed chat:done
+ *   - task:completed            → refresh pendingTask; a changed head recovers
+ *                                  messages if chat:done was missed
  *   - task:failed               → refresh pendingTask + invalidate messages
  *                                  (FailTask persists a failure assistant
  *                                  message that must show up)
@@ -25,7 +25,8 @@
  */
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { chatKeys } from "@/data/queries/chat";
+import { chatKeys, hasOptimisticPendingChatTask, isTaskMessageTaskId } from "@/data/queries/chat";
+import type { ChatPendingTask } from "@multica/core/types";
 import { useWSSubscriptions } from "@/lib/use-ws-subscriptions";
 import { useWSClient } from "./realtime-provider";
 import {
@@ -49,8 +50,13 @@ export function useChatSessionRealtime(
   // callbacks, which may change identity on every screen render.
   useEffect(() => {
     if (!sessionId) return;
+    const pending = qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId));
+    if (hasOptimisticPendingChatTask(pending)) return;
     void qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
     void qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
+    if (isTaskMessageTaskId(pending?.task_id)) {
+      void qc.invalidateQueries({ queryKey: chatKeys.taskMessages(pending.task_id) });
+    }
   }, [qc, sessionId, wsClient]);
 
   useWSSubscriptions(
@@ -61,8 +67,13 @@ export function useChatSessionRealtime(
         p.chat_session_id === sessionId;
 
       const invalidateMine = () => {
+        const pending = qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId));
+        if (hasOptimisticPendingChatTask(pending)) return;
         qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
         qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
+        if (isTaskMessageTaskId(pending?.task_id)) {
+          void qc.invalidateQueries({ queryKey: chatKeys.taskMessages(pending.task_id) });
+        }
       };
 
       return [
@@ -100,8 +111,9 @@ export function useChatSessionRealtime(
         }),
         ws.on("task:completed", (payload) => {
           if (!isMine(payload)) return;
-          // chat:done may have been lost independently of task:completed.
-          invalidateMine();
+          // The pending snapshot's head transition recovers a lost chat:done;
+          // don't cancel and restart chat:done's full message-history request.
+          invalidatePendingTask(qc, sessionId);
         }),
         ws.on("task:failed", (payload) => {
           if (!isMine(payload)) return;

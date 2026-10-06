@@ -47,6 +47,16 @@ export function isTaskMessageTaskId(
   return typeof taskId === "string" && UUID_PATTERN.test(taskId);
 }
 
+// A snapshot cannot yet contain a send that has not been acknowledged. Defer
+// recovery requests until the existing send flow replaces/removes its local
+// placeholder and invalidates the authoritative snapshots itself.
+export function hasOptimisticPendingChatTask(pending: ChatPendingTask | undefined) {
+  return Boolean(
+    (pending?.task_id && !isTaskMessageTaskId(pending.task_id)) ||
+    pending?.queued_tasks?.some((task) => !isTaskMessageTaskId(task.task_id)),
+  );
+}
+
 export const chatSessionsOptions = (wsId: string | null) =>
   queryOptions({
     queryKey: chatKeys.sessions(wsId),
@@ -61,9 +71,9 @@ export const chatMessagesOptions = (sessionId: string | null) =>
     queryFn: ({ signal }) => api.listChatMessages(sessionId!, { signal }),
     enabled: !!sessionId,
     staleTime: Infinity,
-    refetchOnWindowFocus: "always",
-    refetchOnMount: "always",
-    refetchOnReconnect: "always",
+    refetchOnWindowFocus: (query) => query.state.data?.some((m) => m.id.startsWith("optimistic-")) ? false : "always",
+    refetchOnMount: (query) => query.state.data?.some((m) => m.id.startsWith("optimistic-")) ? false : "always",
+    refetchOnReconnect: (query) => query.state.data?.some((m) => m.id.startsWith("optimistic-")) ? false : "always",
   });
 
 export const pendingChatTaskOptions = (sessionId: string | null) =>
@@ -76,17 +86,23 @@ export const pendingChatTaskOptions = (sessionId: string | null) =>
       const pending = await api.getPendingChatTask(sessionId!, { signal });
       // A missed terminal event must recover the final reply as well as the
       // status pill, including when a queued successor becomes the new head.
-      if (previous?.task_id && previous.task_id !== pending.task_id) {
+      const previousId = isTaskMessageTaskId(previous?.task_id) ? previous.task_id : undefined;
+      const nextId = isTaskMessageTaskId(pending.task_id) ? pending.task_id : undefined;
+      if (previous && !hasOptimisticPendingChatTask(previous) && (
+        previousId !== nextId ||
+        (previous.queued_tasks?.length && !pending.task_id && !pending.queued_tasks?.length)
+      )) {
         void client.invalidateQueries({ queryKey: chatKeys.messages(sessionId!) });
       }
       return pending;
     },
     enabled: !!sessionId,
     staleTime: Infinity,
-    refetchOnWindowFocus: "always",
-    refetchOnMount: "always",
-    refetchOnReconnect: "always",
-    refetchInterval: (query) => query.state.data?.task_id ? 30_000 : false,
+    refetchOnWindowFocus: (query) => hasOptimisticPendingChatTask(query.state.data) ? false : "always",
+    refetchOnMount: (query) => hasOptimisticPendingChatTask(query.state.data) ? false : "always",
+    refetchOnReconnect: (query) => hasOptimisticPendingChatTask(query.state.data) ? false : "always",
+    refetchInterval: (query) => !hasOptimisticPendingChatTask(query.state.data) &&
+      (query.state.data?.task_id || query.state.data?.queued_tasks?.length) ? 30_000 : false,
     refetchIntervalInBackground: false,
   });
 

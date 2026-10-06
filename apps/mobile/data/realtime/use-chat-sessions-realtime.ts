@@ -34,6 +34,7 @@ export function useChatSessionsRealtime() {
         }
       };
       const onTerminal = (payload: { chat_session_id?: string }) => {
+        if (!payload.chat_session_id) return;
         invalidateSessions();
         invalidateInactiveSession(payload);
       };
@@ -45,7 +46,8 @@ export function useChatSessionsRealtime() {
         // Cancellation may delete a queued prompt or append "Stopped.", both
         // of which change the session preview.
         ws.on("task:cancelled", onTerminal),
-        ws.on("task:completed", onTerminal),
+        // chat:done owns the list change; this is an offscreen recovery fallback.
+        ws.on("task:completed", invalidateInactiveSession),
         ws.on("task:failed", onTerminal),
         // chat:session_read clears the unread flag (could be triggered from
         // web/desktop on the same account).
