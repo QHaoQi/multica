@@ -11,6 +11,8 @@ vi.mock("@/data/api", () => ({
 import { focusManager, onlineManager, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { api } from "@/data/api";
 import { chatKeys, chatMessagesOptions, pendingChatTaskOptions } from "./chat";
+import { beginChatSend } from "@/data/chat-send-lifecycle";
+import { seedAcceptedPendingTask } from "@/data/realtime/chat-ws-updaters";
 import type { ChatMessage, ChatPendingTask } from "@multica/core/types";
 
 const TASK = "00000000-0000-4000-8000-000000000001";
@@ -131,6 +133,8 @@ describe("chat snapshot recovery", () => {
   });
 
   it("keeps a new session's unacknowledged send visible across mount, focus and connectivity recovery", async () => {
+    const finishSend = beginChatSend("A");
+    cleanup.push(finishSend);
     const optimistic: ChatMessage = {
       id: "optimistic-message", chat_session_id: "A", role: "user", content: "first message",
       created_at: "2026-10-06T00:00:00Z", task_id: null,
@@ -153,6 +157,7 @@ describe("chat snapshot recovery", () => {
     expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("A"))?.task_id).toBe("optimistic-task");
 
     // The existing send response replaces the placeholders, then invalidates.
+    finishSend();
     const accepted = { ...optimistic, id: "server-message", task_id: TASK };
     qc.setQueryData(chatKeys.messages("A"), [accepted]);
     qc.setQueryData(chatKeys.pendingTask("A"), { task_id: TASK, status: "running" });
@@ -167,6 +172,8 @@ describe("chat snapshot recovery", () => {
   });
 
   it("does not interpret a local placeholder as a completed server task", async () => {
+    const finishSend = beginChatSend("A");
+    cleanup.push(finishSend);
     qc.setQueryData(chatKeys.pendingTask("A"), { task_id: "optimistic-task" });
     qc.setQueryData(chatKeys.messages("A"), []);
     vi.mocked(api.getPendingChatTask).mockResolvedValue({});
@@ -196,5 +203,32 @@ describe("chat snapshot recovery", () => {
     expect(qc.getQueryState(chatKeys.messages("A"))?.isInvalidated).toBe(true);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(api.getPendingChatTask).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers an accepted queued send after two snapshot failures even if its placeholder remains", async () => {
+    const finishSend = beginChatSend("A");
+    cleanup.push(finishSend);
+    qc.setQueryData(chatKeys.pendingTask("A"), {
+      task_id: "optimistic-task", status: "queued", created_at: "2026-10-06T00:00:00Z",
+    });
+    seedAcceptedPendingTask(qc, {
+      chat_session_id: "A", task_id: NEXT, queued: true, supports_queue: true,
+      optimistic_task_id: "optimistic-task", created_at: "2026-10-06T00:00:00Z",
+    });
+    // Server accepted a follow-up to a predecessor this cache has not loaded.
+    expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("A"))?.task_id).toBe("optimistic-task");
+    finishSend();
+    vi.mocked(api.getPendingChatTask)
+      .mockRejectedValueOnce(new Error("4G request failed"))
+      .mockRejectedValueOnce(new Error("4G retry failed"))
+      .mockResolvedValue({ task_id: TASK, queued_tasks: [{ task_id: NEXT, status: "queued", created_at: "2026-10-06T00:00:00Z" }] });
+    const pending = new QueryObserver(qc, { ...pendingChatTaskOptions("A"), retry: 1, retryDelay: 0 });
+    cleanup.push(pending.subscribe(() => {}));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.getPendingChatTask).toHaveBeenCalledTimes(2);
+    expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("A"))?.task_id).toBe("optimistic-task");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(api.getPendingChatTask).toHaveBeenCalledTimes(3);
+    expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("A"))?.task_id).toBe(TASK);
   });
 });

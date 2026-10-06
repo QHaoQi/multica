@@ -16,6 +16,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import type { ChatPendingTask } from "@multica/core/types";
 import { api } from "@/data/api";
+import { hasChatSendInFlight } from "@/data/chat-send-lifecycle";
 
 export const chatKeys = {
   all: (wsId: string | null) => ["chat", wsId] as const,
@@ -47,16 +48,6 @@ export function isTaskMessageTaskId(
   return typeof taskId === "string" && UUID_PATTERN.test(taskId);
 }
 
-// A snapshot cannot yet contain a send that has not been acknowledged. Defer
-// recovery requests until the existing send flow replaces/removes its local
-// placeholder and invalidates the authoritative snapshots itself.
-export function hasOptimisticPendingChatTask(pending: ChatPendingTask | undefined) {
-  return Boolean(
-    (pending?.task_id && !isTaskMessageTaskId(pending.task_id)) ||
-    pending?.queued_tasks?.some((task) => !isTaskMessageTaskId(task.task_id)),
-  );
-}
-
 export const chatSessionsOptions = (wsId: string | null) =>
   queryOptions({
     queryKey: chatKeys.sessions(wsId),
@@ -71,9 +62,9 @@ export const chatMessagesOptions = (sessionId: string | null) =>
     queryFn: ({ signal }) => api.listChatMessages(sessionId!, { signal }),
     enabled: !!sessionId,
     staleTime: Infinity,
-    refetchOnWindowFocus: (query) => query.state.data?.some((m) => m.id.startsWith("optimistic-")) ? false : "always",
-    refetchOnMount: (query) => query.state.data?.some((m) => m.id.startsWith("optimistic-")) ? false : "always",
-    refetchOnReconnect: (query) => query.state.data?.some((m) => m.id.startsWith("optimistic-")) ? false : "always",
+    refetchOnWindowFocus: () => hasChatSendInFlight(sessionId) ? false : "always",
+    refetchOnMount: () => hasChatSendInFlight(sessionId) ? false : "always",
+    refetchOnReconnect: () => hasChatSendInFlight(sessionId) ? false : "always",
   });
 
 export const pendingChatTaskOptions = (sessionId: string | null) =>
@@ -88,7 +79,7 @@ export const pendingChatTaskOptions = (sessionId: string | null) =>
       // status pill, including when a queued successor becomes the new head.
       const previousId = isTaskMessageTaskId(previous?.task_id) ? previous.task_id : undefined;
       const nextId = isTaskMessageTaskId(pending.task_id) ? pending.task_id : undefined;
-      if (previous && !hasOptimisticPendingChatTask(previous) && (
+      if (previous && !hasChatSendInFlight(sessionId) && (
         previousId !== nextId ||
         (previous.queued_tasks?.length && !pending.task_id && !pending.queued_tasks?.length)
       )) {
@@ -98,10 +89,10 @@ export const pendingChatTaskOptions = (sessionId: string | null) =>
     },
     enabled: !!sessionId,
     staleTime: Infinity,
-    refetchOnWindowFocus: (query) => hasOptimisticPendingChatTask(query.state.data) ? false : "always",
-    refetchOnMount: (query) => hasOptimisticPendingChatTask(query.state.data) ? false : "always",
-    refetchOnReconnect: (query) => hasOptimisticPendingChatTask(query.state.data) ? false : "always",
-    refetchInterval: (query) => !hasOptimisticPendingChatTask(query.state.data) &&
+    refetchOnWindowFocus: () => hasChatSendInFlight(sessionId) ? false : "always",
+    refetchOnMount: () => hasChatSendInFlight(sessionId) ? false : "always",
+    refetchOnReconnect: () => hasChatSendInFlight(sessionId) ? false : "always",
+    refetchInterval: (query) => !hasChatSendInFlight(sessionId) &&
       (query.state.data?.task_id || query.state.data?.queued_tasks?.length) ? 30_000 : false,
     refetchIntervalInBackground: false,
   });

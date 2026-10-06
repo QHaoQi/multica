@@ -25,7 +25,8 @@
  */
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { chatKeys, hasOptimisticPendingChatTask, isTaskMessageTaskId } from "@/data/queries/chat";
+import { chatKeys, isTaskMessageTaskId } from "@/data/queries/chat";
+import { hasChatSendInFlight } from "@/data/chat-send-lifecycle";
 import type { ChatPendingTask } from "@multica/core/types";
 import { useWSSubscriptions } from "@/lib/use-ws-subscriptions";
 import { useWSClient } from "./realtime-provider";
@@ -51,7 +52,7 @@ export function useChatSessionRealtime(
   useEffect(() => {
     if (!sessionId) return;
     const pending = qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId));
-    if (hasOptimisticPendingChatTask(pending)) return;
+    if (hasChatSendInFlight(sessionId)) return;
     void qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
     void qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
     if (isTaskMessageTaskId(pending?.task_id)) {
@@ -68,7 +69,7 @@ export function useChatSessionRealtime(
 
       const invalidateMine = () => {
         const pending = qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId));
-        if (hasOptimisticPendingChatTask(pending)) return;
+        if (hasChatSendInFlight(sessionId)) return;
         qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
         qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
         if (isTaskMessageTaskId(pending?.task_id)) {

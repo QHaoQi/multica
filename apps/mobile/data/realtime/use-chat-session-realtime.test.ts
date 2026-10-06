@@ -29,6 +29,7 @@ vi.mock("@/lib/use-ws-subscriptions", () => ({
 vi.mock("@/data/api", () => ({ api: { getPendingChatTask: vi.fn() } }));
 import { api } from "@/data/api";
 import { chatKeys, pendingChatTaskOptions } from "@/data/queries/chat";
+import { beginChatSend } from "@/data/chat-send-lifecycle";
 import { useChatSessionRealtime } from "./use-chat-session-realtime";
 
 const TASK = "00000000-0000-4000-8000-000000000001";
@@ -98,10 +99,12 @@ describe("chat session snapshot lifecycle", () => {
     state.qc.setQueryData(chatKeys.messages("A"), optimistic);
     state.qc.setQueryData(chatKeys.pendingTask("A"), localPending);
     const invalidate = vi.spyOn(state.qc, "invalidateQueries");
+    const finishSend = beginChatSend("A");
     useChatSessionRealtime("A");
     expect(invalidate).not.toHaveBeenCalled();
     expect(state.qc.getQueryData(chatKeys.messages("A"))).toEqual(optimistic);
     expect(state.qc.getQueryData(chatKeys.pendingTask("A"))).toEqual(localPending);
+    finishSend();
   });
 
   it("refreshes the running task's cached trace when re-entering its session", () => {

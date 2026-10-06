@@ -37,6 +37,14 @@ import type {
 } from "@multica/core/types";
 import { chatKeys } from "@/data/queries/chat";
 
+/** Stop pre-send reads before writing the local outgoing message/task. */
+export async function cancelChatSnapshotRequests(qc: QueryClient, sessionId: string) {
+  await Promise.all([
+    qc.cancelQueries({ queryKey: chatKeys.messages(sessionId) }, { revert: false }),
+    qc.cancelQueries({ queryKey: chatKeys.pendingTask(sessionId) }, { revert: false }),
+  ]);
+}
+
 // =====================================================
 // Sessions list (ChatSession[] keyed by wsId)
 // =====================================================
