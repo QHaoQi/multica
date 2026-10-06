@@ -57,6 +57,17 @@ describe("applyChatDoneToCache", () => {
     applyChatDoneToCache(qc, donePayload());
     expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask(SESSION))?.task_id).toBeUndefined();
   });
+
+  it("preserves a queue-only snapshot whose authoritative head has not loaded yet", () => {
+    const qc = new QueryClient();
+    const queueOnly: ChatPendingTask = {
+      supports_queue: true,
+      queued_tasks: [{ task_id: "next", status: "queued", created_at: "2026-10-06T00:00:00Z" }],
+    };
+    qc.setQueryData(chatKeys.pendingTask(SESSION), queueOnly);
+    applyChatDoneToCache(qc, donePayload());
+    expect(qc.getQueryData(chatKeys.pendingTask(SESSION))).toEqual(queueOnly);
+  });
   it("patches the assistant bubble inline AND invalidates messages so bound attachments refetch", () => {
     const qc = new QueryClient();
     qc.setQueryData<ChatMessage[]>(chatKeys.messages(SESSION), []);

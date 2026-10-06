@@ -158,7 +158,7 @@ export function applyChatDoneToCache(
   // don't leave a completed task's timer running if the snapshot GET fails.
   qc.setQueryData<ChatPendingTask>(
     chatKeys.pendingTask(payload.chat_session_id),
-    (old) => old ? removePendingChatTask(old, payload.task_id) : old,
+    (old) => old?.task_id ? removePendingChatTask(old, payload.task_id) : old,
   );
   invalidatePendingTask(qc, payload.chat_session_id);
 }
